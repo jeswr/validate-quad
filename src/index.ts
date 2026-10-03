@@ -27,19 +27,17 @@ export interface TermChecks {
   datatypes?: boolean;
 }
 
-export interface ValidatorOptions {
-  /**
-   * The content type of the serialization the quads are destined for.
-   * Omit it to validate against the abstract RDF dataset model.
-   */
-  format?: ContentType;
-  /** The RDF version to validate against (default `'1.2'`). */
-  version?: RdfVersion;
+export interface ValidatorOptions<F extends ContentType = ContentType, V extends RdfVersion = RdfVersion> {
+  /** The content type of the serialization the quads are destined for. */
+  format: F;
+  /** The RDF version to validate against. */
+  version: V;
   /** `true` (the default) runs all term checks, `false` none; an object selects them. */
   terms?: boolean | TermChecks;
 }
 
-export interface ValidationStreamOptions extends ValidatorOptions {
+export interface ValidationStreamOptions<F extends ContentType = ContentType, V extends RdfVersion = RdfVersion>
+  extends ValidatorOptions<F, V> {
   /** `'error'` (the default) fails the stream; `'skip'` drops the quad and emits `invalid`. */
   onInvalid?: 'error' | 'skip';
 }
@@ -61,6 +59,57 @@ export interface QuadValidationError extends Error {
 /** A function that validates quads, returning an error for an invalid quad and `null` otherwise. */
 export type QuadValidator = (quad: RDF.BaseQuad) => QuadValidationError | null;
 
+/** A literal that is valid in the given RDF version (no base direction in RDF 1.1). */
+export type ValidLiteral<V extends RdfVersion> =
+  V extends '1.1' ? RDF.Literal & { direction?: '' | null } : RDF.Literal;
+
+// Whether a content type is Notation3 or has named graphs
+type IsN3<F extends ContentType> = F extends 'text/n3' ? true : false;
+type HasGraphs<F extends ContentType> = F extends 'application/trig' | 'application/n-quads' ? true : false;
+
+/** A term that can appear as subject, predicate or object in N3. */
+type N3Term<F extends ContentType, V extends RdfVersion> =
+  | RDF.NamedNode | RDF.BlankNode | ValidLiteral<V> | RDF.Variable | ValidTripleTerm<F, V>;
+
+/** The terms that can be the subject of a valid quad. */
+export type ValidSubject<F extends ContentType, V extends RdfVersion> =
+  IsN3<F> extends true ? N3Term<F, V> : RDF.NamedNode | RDF.BlankNode;
+
+/** The terms that can be the predicate of a valid quad. */
+export type ValidPredicate<F extends ContentType, V extends RdfVersion> =
+  IsN3<F> extends true ? N3Term<F, V> : RDF.NamedNode;
+
+/** The terms that can be the object of a valid quad. */
+export type ValidObject<F extends ContentType, V extends RdfVersion> =
+  IsN3<F> extends true ? N3Term<F, V> :
+    RDF.NamedNode | RDF.BlankNode | ValidLiteral<V> | ValidTripleTerm<F, V>;
+
+/** The terms that can be the graph of a valid quad. */
+export type ValidGraph<F extends ContentType> =
+  IsN3<F> extends true ? RDF.DefaultGraph | RDF.BlankNode :
+    HasGraphs<F> extends true ? RDF.DefaultGraph | RDF.NamedNode | RDF.BlankNode : RDF.DefaultGraph;
+
+/** A triple term that is valid inside a valid quad (only RDF 1.2 has them). */
+export type ValidTripleTerm<F extends ContentType, V extends RdfVersion> =
+  V extends '1.2' ? ValidTriple<F, V> : never;
+
+/** A triple, as found inside a triple term: a quad in the default graph. */
+export interface ValidTriple<F extends ContentType, V extends RdfVersion> extends RDF.BaseQuad {
+  termType: 'Quad';
+  subject: ValidSubject<F, V>;
+  predicate: ValidPredicate<F, V>;
+  object: ValidObject<F, V>;
+  graph: RDF.DefaultGraph;
+}
+
+/** A quad that is valid for the given content type and RDF version. */
+export interface ValidQuad<F extends ContentType, V extends RdfVersion> extends RDF.BaseQuad {
+  subject: ValidSubject<F, V>;
+  predicate: ValidPredicate<F, V>;
+  object: ValidObject<F, V>;
+  graph: ValidGraph<F>;
+}
+
 const RDF_NS = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
 const LANG_STRING = `${RDF_NS}langString`;
 const DIR_LANG_STRING = `${RDF_NS}dirLangString`;
@@ -76,7 +125,6 @@ const PROFILES: Readonly<Record<ContentType, Profile>> = {
   'application/n-quads': { n3: false, graphs: true },
   'text/n3': { n3: true, graphs: false },
 };
-const DATASET_PROFILE: Profile = { n3: false, graphs: true };
 
 // Blank node labels, following the `BLANK_NODE_LABEL` rule shared by
 // Turtle, TriG, N-Triples and N-Quads (without the `_:` prefix)
@@ -138,9 +186,6 @@ class ValidationError extends Error implements QuadValidationError {
 
 // Determines what the target format can represent
 function getProfile(format: unknown): Profile {
-  // Without a format, the target is an abstract RDF dataset
-  if (format === undefined)
-    return DATASET_PROFILE;
   if (typeof format !== 'string' || !Object.hasOwn(PROFILES, format))
     throw new Error(`Unsupported format: ${String(JSON.stringify(format))}; expected one of ${Object.keys(PROFILES).join(', ')}`);
   return PROFILES[format as ContentType];
@@ -183,17 +228,17 @@ const types = (...termTypes: string[]): TermTypes =>
  * returning a `QuadValidationError` for an invalid quad and `null` otherwise.
  * Throws if the options are invalid.
  */
-export function createValidator(options: ValidatorOptions = {}): QuadValidator {
+export function createValidator(options: ValidatorOptions): QuadValidator {
+  if (typeof options !== 'object' || options === null)
+    throw new TypeError('Expected an options object with a format and a version');
   const { n3, graphs } = getProfile(options.format);
-  // Only an omitted version defaults; null is invalid like any other value
-  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-  const version: unknown = options.version === undefined ? '1.2' : options.version;
+  const version: unknown = options.version;
   if (!VERSIONS.has(version))
     throw new Error(`Unsupported RDF version: ${String(JSON.stringify(version))}; expected one of 1.1, 1.2-basic, 1.2`);
   const check = getTermChecks(options.terms);
   const tripleTerms = version === '1.2';
   const directions = version !== '1.1';
-  const formatName = options.format ?? 'an RDF dataset';
+  const formatName = options.format;
 
   // Term types that each position allows, at the top level and inside triple terms
   const anyTerm = n3 ? types('NamedNode', 'BlankNode', 'Literal', 'Variable', 'Quad') : null;
@@ -292,12 +337,39 @@ export function createValidator(options: ValidatorOptions = {}): QuadValidator {
   return quad => validate(quad, quad, false);
 }
 
+// Validators for common option combinations are reused across calls
+const validators = new Map<string, QuadValidator>();
+function getValidator(options: ValidatorOptions): QuadValidator {
+  // Only plain string and boolean options make a safe cache key
+  const { format, version, terms } = options as Partial<ValidatorOptions> | null ?? {};
+  if (typeof format !== 'string' || typeof version !== 'string' ||
+      (terms !== undefined && typeof terms !== 'boolean'))
+    return createValidator(options);
+  const key = `${format} ${version} ${String(terms)}`;
+  let validator = validators.get(key);
+  if (!validator)
+    validators.set(key, validator = createValidator(options));
+  return validator;
+}
+
 /**
  * Validates a single quad, returning a `QuadValidationError` or `null`.
- * Use `createValidator` when validating many quads with the same options.
+ * Throws if the options are invalid.
  */
-export function validateQuad(quad: RDF.BaseQuad, options?: ValidatorOptions): QuadValidationError | null {
-  return createValidator(options)(quad);
+export function validateQuad(quad: RDF.BaseQuad, options: ValidatorOptions): QuadValidationError | null {
+  return getValidator(options)(quad);
+}
+
+/**
+ * Asserts that a quad is valid for the given content type and RDF version,
+ * throwing its `QuadValidationError` otherwise.
+ * In TypeScript, the quad's terms are then narrowed to what that format and version allow.
+ */
+export function assertQuad<Q extends RDF.BaseQuad, F extends ContentType, V extends RdfVersion>(
+  quad: Q, options: ValidatorOptions<F, V>): asserts quad is Q & ValidQuad<F, V> {
+  const error = getValidator(options)(quad);
+  if (error)
+    throw error;
 }
 
 /**
@@ -305,7 +377,7 @@ export function validateQuad(quad: RDF.BaseQuad, options?: ValidatorOptions): Qu
  * Invalid quads cause an error (`onInvalid: 'error'`, the default)
  * or are dropped with an `invalid` event (`onInvalid: 'skip'`).
  */
-export function createValidationStream(options: ValidationStreamOptions = {}): Transform {
+export function createValidationStream(options: ValidationStreamOptions): Transform {
   const validate = createValidator(options);
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const onInvalid: unknown = options.onInvalid === undefined ? 'error' : options.onInvalid;

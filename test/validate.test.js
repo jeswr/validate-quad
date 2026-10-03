@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DataFactory } from 'n3';
 import {
-  createValidator, validateQuad,
+  assertQuad, createValidator, validateQuad,
 } from '@rdfjs/validate-quad';
 
 const { namedNode, blankNode, literal, variable, quad, defaultGraph } = DataFactory;
@@ -27,13 +27,24 @@ function isValidationError(error) {
   return error instanceof Error && error.name === 'QuadValidationError';
 }
 
+// Options default to N-Quads in RDF 1.2, the most permissive non-N3 combination
+const DEFAULTS = { format: 'application/n-quads', version: '1.2' };
+
 function expectValid(q, options) {
+  options = { ...DEFAULTS, ...options };
   assert.equal(validateQuad(q, options), null);
+  assert.doesNotThrow(() => assertQuad(q, options));
 }
 
 function expectInvalid(q, options, position, message) {
+  options = { ...DEFAULTS, ...options };
   const error = validateQuad(q, options);
   assert.ok(isValidationError(error), `expected an error for ${JSON.stringify(options)}`);
+  assert.throws(() => assertQuad(q, options), thrown => {
+    assert.equal(thrown.message, error.message);
+    assert.equal(thrown.position, error.position);
+    return isValidationError(thrown);
+  });
   assert.equal(error.quad, q);
   assert.equal(error.position, position);
   if (message)
@@ -44,7 +55,7 @@ function expectInvalid(q, options, position, message) {
 describe('validateQuad', () => {
   describe('with valid quads', () => {
     it('accepts a triple in every format', () => {
-      for (const format of [undefined, ...Object.values(FORMATS).flat()])
+      for (const format of Object.values(FORMATS).flat())
         expectValid(quad(s, p, o), { format });
     });
 
@@ -57,7 +68,7 @@ describe('validateQuad', () => {
     });
 
     it('accepts named graphs where the format has graphs', () => {
-      for (const format of [undefined, ...FORMATS.TriG, ...FORMATS['N-Quads']]) {
+      for (const format of [...FORMATS.TriG, ...FORMATS['N-Quads']]) {
         expectValid(quad(s, p, o, g), { format });
         expectValid(quad(s, p, o, blankNode('g')), { format });
       }
@@ -124,8 +135,8 @@ describe('validateQuad', () => {
       expectInvalid(quad(s, p, o, blankNode('g')), { format: 'text/turtle' }, 'graph', /in text\/turtle$/);
     });
 
-    it('describes an abstract dataset when no format is given', () => {
-      expectInvalid(quad(s, literal('a'), o), {}, 'predicate', /in an RDF dataset$/);
+    it('names the format in the message', () => {
+      expectInvalid(quad(s, literal('a'), o), {}, 'predicate', /in application\/n-quads$/);
     });
 
     describe('in N3', () => {
@@ -260,10 +271,10 @@ describe('validateQuad', () => {
     });
 
     it('rejects non-objects', () => {
-      const error = validateQuad(null);
+      const error = validateQuad(null, DEFAULTS);
       assert.ok(isValidationError(error));
       assert.equal(error.position, null);
-      assert.match(validateQuad('quad').message, /Expected a quad/);
+      assert.match(validateQuad('quad', DEFAULTS).message, /Expected a quad/);
     });
 
     it('rejects unknown term types', () => {
@@ -274,33 +285,45 @@ describe('validateQuad', () => {
   describe('options', () => {
     it('accepts exactly the supported content types', () => {
       for (const format of Object.values(FORMATS).flat())
-        assert.equal(typeof createValidator({ format }), 'function');
+        assert.equal(typeof createValidator({ format, version: '1.2' }), 'function');
+    });
+
+    it('requires options with a format and a version', () => {
+      for (const create of [createValidator, options => validateQuad(quad(s, p, o), options),
+        options => assertQuad(quad(s, p, o), options)]) {
+        assert.throws(() => create(), /^TypeError: Expected an options object with a format and a version$/);
+        assert.throws(() => create(null), TypeError);
+        assert.throws(() => create('text/turtle'), TypeError);
+        assert.throws(() => create({}), /Unsupported format: undefined/);
+        assert.throws(() => create({ format: 'text/turtle' }), /Unsupported RDF version: undefined/);
+        assert.throws(() => create({ version: '1.2' }), /Unsupported format: undefined/);
+      }
     });
 
     it('rejects anything else as a format', () => {
-      for (const format of ['Turtle', 'TriG', 'N-Triples', 'N-Quads', 'N3', 'turtle', 'text/turtle*',
+      for (const format of [undefined, 'Turtle', 'TriG', 'N-Triples', 'N-Quads', 'N3', 'turtle', 'text/turtle*',
         'TEXT/TURTLE', 'text/turtle; charset=utf-8', ' text/turtle', 'application/rdf+xml',
         'application/ld+json', '', null, 3, {}, 'toString'])
-        assert.throws(() => createValidator({ format }), /^Error: Unsupported format: .*; expected one of text\/turtle, application\/trig, application\/n-triples, application\/n-quads, text\/n3$/, String(format));
+        assert.throws(() => createValidator({ format, version: '1.2' }), /^Error: Unsupported format: .*; expected one of text\/turtle, application\/trig, application\/n-triples, application\/n-quads, text\/n3$/, String(format));
     });
 
     it('accepts exactly the supported versions', () => {
       for (const version of ['1.1', '1.2-basic', '1.2'])
-        assert.equal(typeof createValidator({ version }), 'function');
+        assert.equal(typeof createValidator({ format: 'text/turtle', version }), 'function');
     });
 
     it('rejects anything else as a version', () => {
-      for (const version of ['1.0', '1.3', '1.2-Basic', '1.2-full', '1.2 ', 'RDF 1.2', '', null, 1.1, 1.2, {}])
-        assert.throws(() => createValidator({ version }), /^Error: Unsupported RDF version: .*; expected one of 1\.1, 1\.2-basic, 1\.2$/, String(version));
+      for (const version of [undefined, '1.0', '1.3', '1.2-Basic', '1.2-full', '1.2 ', 'RDF 1.2', '', null, 1.1, 1.2, {}])
+        assert.throws(() => createValidator({ format: 'text/turtle', version }), /^Error: Unsupported RDF version: .*; expected one of 1\.1, 1\.2-basic, 1\.2$/, String(version));
     });
 
     it('rejects invalid term options', () => {
-      assert.throws(() => createValidator({ terms: 'yes' }), TypeError);
-      assert.throws(() => createValidator({ terms: null }), TypeError);
+      assert.throws(() => createValidator({ ...DEFAULTS, terms: 'yes' }), TypeError);
+      assert.throws(() => createValidator({ ...DEFAULTS, terms: null }), TypeError);
     });
 
     it('returns a reusable validator', () => {
-      const validate = createValidator({ format: 'text/turtle' });
+      const validate = createValidator({ format: 'text/turtle', version: '1.2' });
       assert.equal(validate(quad(s, p, o)), null);
       assert.ok(isValidationError(validate(quad(s, p, o, g))));
       assert.equal(validate(quad(s, p, o)), null);
@@ -336,6 +359,45 @@ describe('validateQuad', () => {
       expectValid(quad(s, p, literal('12', namedNode(`${XSD}integer`))));
       expectInvalid(quad(s, p, literal('1.5', namedNode(`${XSD}integer`))), {}, 'object');
       expectValid(quad(s, p, literal('anything', namedNode('http://ex.org/unknown'))));
+    });
+  });
+
+  describe('with cached validators', () => {
+    it('keeps option combinations apart', () => {
+      const q = quad(s, p, literal('1', namedNode(`${XSD}integer`)), g);
+      expectValid(q, { format: 'application/trig' });
+      expectInvalid(q, { format: 'text/turtle' }, 'graph');
+      expectValid(q, { format: 'application/trig', version: '1.1' });
+      const bad = quad(s, p, literal('one', namedNode(`${XSD}integer`)));
+      expectInvalid(bad, { terms: true }, 'object');
+      expectValid(bad, { terms: false });
+      expectInvalid(bad, {}, 'object');
+      expectValid(bad, { terms: { iris: true } });
+      expectInvalid(bad, { terms: { datatypes: true } }, 'object');
+    });
+
+    it('does not reuse a validator for options that only stringify like valid ones', () => {
+      const format = { toString: () => 'text/turtle' };
+      expectValid(quad(s, p, o), { format: 'text/turtle' });
+      assert.throws(() => validateQuad(quad(s, p, o), { format, version: '1.2' }), /Unsupported format/);
+      assert.throws(() => assertQuad(quad(s, p, o), { format, version: '1.2' }), /Unsupported format/);
+    });
+  });
+});
+
+describe('assertQuad', () => {
+  it('returns nothing for a valid quad', () => {
+    assert.equal(assertQuad(quad(s, p, o), DEFAULTS), undefined);
+  });
+
+  it('throws the validation error for an invalid quad', () => {
+    const q = quad(s, p, o, g);
+    assert.throws(() => assertQuad(q, { format: 'text/turtle', version: '1.2' }), error => {
+      assert.equal(error.name, 'QuadValidationError');
+      assert.equal(error.quad, q);
+      assert.equal(error.position, 'graph');
+      assert.equal(error.term, g);
+      return true;
     });
   });
 });

@@ -26,13 +26,13 @@ function toString(stream) {
 describe('createValidationStream', () => {
   it('passes valid quads through', async () => {
     const quads = [quad(s, p, literal('a')), quad(s, p, literal('b'))];
-    const output = await collect(Readable.from(quads).pipe(createValidationStream()));
+    const output = await collect(Readable.from(quads).pipe(createValidationStream({ format: 'application/n-quads', version: '1.2' })));
     assert.deepEqual(output, quads);
   });
 
   it('emits an error for an invalid quad by default', async () => {
     const quads = [quad(s, p, literal('a')), quad(s, p, literal('b'), g)];
-    const stream = createValidationStream({ format: 'text/turtle' });
+    const stream = createValidationStream({ format: 'text/turtle', version: '1.2' });
     const seen = [];
     stream.on('data', q => seen.push(q));
     await assert.rejects(pipeline(Readable.from(quads), stream), error => {
@@ -46,7 +46,7 @@ describe('createValidationStream', () => {
 
   it('drops invalid quads and emits invalid events with onInvalid: skip', async () => {
     const quads = [quad(s, p, literal('a')), quad(s, literal('bad'), literal('b')), quad(s, p, literal('c'))];
-    const stream = createValidationStream({ onInvalid: 'skip' });
+    const stream = createValidationStream({ format: 'application/n-quads', version: '1.2', onInvalid: 'skip' });
     const invalid = [];
     stream.on('invalid', error => invalid.push(error));
     const output = await collect(Readable.from(quads).pipe(stream));
@@ -56,8 +56,8 @@ describe('createValidationStream', () => {
   });
 
   it('rejects unknown onInvalid values and validator options', () => {
-    assert.throws(() => createValidationStream({ onInvalid: 'warn' }), /Unsupported onInvalid option value: "warn"/);
-    assert.throws(() => createValidationStream({ format: 'application/rdf+xml' }), /Unsupported format/);
+    assert.throws(() => createValidationStream({ format: 'application/n-quads', version: '1.2', onInvalid: 'warn' }), /Unsupported onInvalid option value: "warn"/);
+    assert.throws(() => createValidationStream({ format: 'application/rdf+xml', version: '1.2' }), /Unsupported format/);
   });
 
   describe('between the N3.js parser and writer', () => {
@@ -65,7 +65,7 @@ describe('createValidationStream', () => {
       const input = '<http://ex.org/s> <http://ex.org/p> "a"@en .\n';
       const output = await toString(Readable.from([input])
         .pipe(new StreamParser({ format: 'N-Triples' }))
-        .pipe(createValidationStream({ format: 'application/n-triples' }))
+        .pipe(createValidationStream({ format: 'application/n-triples', version: '1.2' }))
         .pipe(new StreamWriter({ format: 'N-Triples' })));
       assert.equal(output, input);
     });
@@ -73,7 +73,7 @@ describe('createValidationStream', () => {
     it('stops TriG data with graphs from being written as Turtle', async () => {
       const input = '<http://ex.org/g> { <http://ex.org/s> <http://ex.org/p> <http://ex.org/o> . }';
       const parser = new StreamParser({ format: 'TriG' });
-      const validator = createValidationStream({ format: 'text/turtle' });
+      const validator = createValidationStream({ format: 'text/turtle', version: '1.2' });
       await assert.rejects(
         pipeline(Readable.from([input]), parser, validator, new StreamWriter({ format: 'Turtle' })),
         /NamedNode cannot be the graph in text\/turtle/);
@@ -87,7 +87,7 @@ describe('createValidationStream', () => {
         '<http://ex.org/s> <http://ex.org/p> <http://ex.org/%ZZ> .',
         '',
       ].join('\n');
-      const validator = createValidationStream({ format: 'application/n-triples', onInvalid: 'skip' });
+      const validator = createValidationStream({ format: 'application/n-triples', version: '1.2', onInvalid: 'skip' });
       const invalid = [];
       validator.on('invalid', error => invalid.push(error.message));
       const output = await toString(Readable.from([input])
@@ -103,7 +103,7 @@ describe('createValidationStream', () => {
       const input = '?x <http://ex.org/p> "a" .';
       const output = await toString(Readable.from([input])
         .pipe(new StreamParser({ format: 'N3' }))
-        .pipe(createValidationStream({ format: 'text/n3' }))
+        .pipe(createValidationStream({ format: 'text/n3', version: '1.2' }))
         .pipe(new StreamWriter({ format: 'N3' })));
       assert.match(output, /\?x <http:\/\/ex.org\/p> "a"/);
     });
