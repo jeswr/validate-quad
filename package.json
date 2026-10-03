@@ -1,0 +1,69 @@
+{
+  "name": "@rdfjs/validate-quad",
+  "version": "0.1.0",
+  "description": "Validate RDF/JS quads against what an RDF version and serialization format can represent",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "main": "./src/index.js",
+  "types": "./index.d.ts",
+  "files": [
+    "src",
+    "index.d.ts"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "test": "node --test test/validate.test.js test/stream.test.js",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=src/** --test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 test/validate.test.js test/stream.test.js",
+    "test:types": "tsc -p test/types",
+    "lint": "eslint .",
+    "check": "npm run lint && npm run test:types && npm run test:coverage"
+  },
+  "keywords": [
+    "rdf",
+    "rdfjs",
+    "validation",
+    "quad",
+    "turtle",
+    "trig",
+    "n-triples",
+    "n-quads",
+    "n3"
+  ],
+  "author": "Jesse Wright",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeswr/validate-quad.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jeswr/validate-quad/issues"
+  },
+  "homepage": "https://github.com/jeswr/validate-quad#readme",
+  "dependencies": {
+    "@rdfjs/types": "^2.0.1",
+    "bcp-47": "^2.1.1",
+    "rdf-validate-datatype": "^0.2.2",
+    "readable-stream": "^4.7.0",
+    "validate-iri": "^1.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/n3": "^1.26.4",
+    "@types/readable-stream": "^4.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^16.0.0",
+    "n3": "^2.0.0",
+    "typescript": "^5.9.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
