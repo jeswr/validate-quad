@@ -16,6 +16,8 @@ It checks:
 npm install @rdfjs/validate-quad
 ```
 
+The package is written in TypeScript and ships its types. It exports three functions, `createValidator`, `validateQuad` and `createValidationStream`, plus the types for their options and results (`ValidatorOptions`, `ValidationStreamOptions`, `ContentType`, `RdfVersion`, `TermChecks`, `QuadValidator`, `QuadValidationError` and `QuadPosition`).
+
 ## Usage
 
 ### In an N3.js stream pipeline
@@ -29,7 +31,7 @@ import { createValidationStream } from '@rdfjs/validate-quad';
 
 fs.createReadStream('data.trig')
   .pipe(new StreamParser({ format: 'TriG' }))
-  .pipe(createValidationStream({ format: 'Turtle' }))   // fails on quads in a named graph
+  .pipe(createValidationStream({ format: 'text/turtle' }))   // fails on quads in a named graph
   .pipe(new StreamWriter({ format: 'Turtle' }))
   .pipe(process.stdout);
 ```
@@ -37,7 +39,7 @@ fs.createReadStream('data.trig')
 By default an invalid quad fails the stream with a `QuadValidationError`. To drop invalid quads instead, pass `onInvalid: 'skip'` and listen for `invalid` events:
 
 ```js
-const validator = createValidationStream({ format: 'N-Triples', onInvalid: 'skip' });
+const validator = createValidationStream({ format: 'application/n-triples', onInvalid: 'skip' });
 validator.on('invalid', error => console.warn(error.message));
 ```
 
@@ -47,7 +49,7 @@ validator.on('invalid', error => console.warn(error.message));
 import { createValidator, validateQuad } from '@rdfjs/validate-quad';
 
 // Create a validator once and reuse it for many quads
-const validate = createValidator({ format: 'N-Quads', version: '1.1' });
+const validate = createValidator({ format: 'application/n-quads', version: '1.1' });
 for (const quad of quads) {
   const error = validate(quad);
   if (error)
@@ -55,23 +57,25 @@ for (const quad of quads) {
 }
 
 // Or validate a single quad
-const error = validateQuad(quad, { format: 'Turtle' });
+const error = validateQuad(quad, { format: 'text/turtle' });
 ```
 
-A validator returns `null` for a valid quad and a `QuadValidationError` otherwise. The error has the validated `quad`, the `position` of the offending term (`subject`, `predicate`, `object` or `graph`; inside a triple term, its position there), and the offending `term`. Validators never throw on bad input; only invalid options throw, when the validator is created.
+A validator returns `null` for a valid quad and an `Error` named `QuadValidationError` otherwise. The error has the validated `quad`, the `position` of the offending term (`subject`, `predicate`, `object` or `graph`; inside a triple term, its position there), and the offending `term`. Validators never throw on bad input; only invalid options throw, when the validator is created.
 
 ## Options
 
 | Option | Values | Default |
 |---|---|---|
-| `format` | An N3.js-style format name or MIME type: Turtle, TriG, N-Triples, N-Quads, N3 (also `text/turtle`, `application/n-quads`, `text/n3` and so on) | none: an abstract RDF dataset, with named graphs allowed |
+| `format` | Exactly one of `text/turtle`, `application/trig`, `application/n-triples`, `application/n-quads`, `text/n3` | none: an abstract RDF dataset, with named graphs allowed |
 | `version` | `'1.1'`, `'1.2-basic'`, `'1.2'` | `'1.2'` |
 | `terms` | `true` (all term checks), `false` (none), or an object selecting `iris`, `blankNodeLabels`, `languageTags` and `datatypes` | `true` |
 | `onInvalid` (stream only) | `'error'`, `'skip'` | `'error'` |
 
+Any other `format` or `version` value, including `null`, a format name such as `Turtle`, or a content type with parameters, throws when the validator is created. So do unknown `terms` and `onInvalid` values.
+
 The positions each format allows:
 
-| Position | Turtle, N-Triples | TriG, N-Quads, no format | N3 |
+| Position | `text/turtle`, `application/n-triples` | `application/trig`, `application/n-quads`, no format | `text/n3` |
 |---|---|---|---|
 | subject | IRI, blank node | IRI, blank node | IRI, blank node, literal, variable, triple term |
 | predicate | IRI | IRI | IRI, blank node, literal, variable, triple term |
@@ -81,10 +85,6 @@ The positions each format allows:
 Inside a triple term, the graph must be the default graph, and the subject, predicate and object follow the same rules as above (so in RDF 1.2 a triple term can't be the subject of another triple term outside N3).
 
 Position and version checks always run. `terms: false` skips only the well-formedness checks.
-
-## Term helpers
-
-The individual checks are exported too: `isValidIri`, `isValidBlankNodeLabel`, `isValidLanguageTag`, `isValidBaseDirection` and `isValidDatatypeValue(value, datatype)`.
 
 ## Built on
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DataFactory, StreamParser, StreamWriter } from 'n3';
-import { createValidationStream, QuadValidationError } from '@rdfjs/validate-quad';
+import { createValidationStream } from '@rdfjs/validate-quad';
 
 const { namedNode, literal, quad } = DataFactory;
 const s = namedNode('http://ex.org/s');
@@ -32,11 +32,11 @@ describe('createValidationStream', () => {
 
   it('emits an error for an invalid quad by default', async () => {
     const quads = [quad(s, p, literal('a')), quad(s, p, literal('b'), g)];
-    const stream = createValidationStream({ format: 'Turtle' });
+    const stream = createValidationStream({ format: 'text/turtle' });
     const seen = [];
     stream.on('data', q => seen.push(q));
     await assert.rejects(pipeline(Readable.from(quads), stream), error => {
-      assert.ok(error instanceof QuadValidationError);
+      assert.equal(error.name, 'QuadValidationError');
       assert.equal(error.position, 'graph');
       assert.equal(error.quad, quads[1]);
       return true;
@@ -56,8 +56,8 @@ describe('createValidationStream', () => {
   });
 
   it('rejects unknown onInvalid values and validator options', () => {
-    assert.throws(() => createValidationStream({ onInvalid: 'warn' }), /Unknown onInvalid option value: warn/);
-    assert.throws(() => createValidationStream({ format: 'RDF/XML' }), /Unknown format/);
+    assert.throws(() => createValidationStream({ onInvalid: 'warn' }), /Unsupported onInvalid option value: "warn"/);
+    assert.throws(() => createValidationStream({ format: 'application/rdf+xml' }), /Unsupported format/);
   });
 
   describe('between the N3.js parser and writer', () => {
@@ -65,7 +65,7 @@ describe('createValidationStream', () => {
       const input = '<http://ex.org/s> <http://ex.org/p> "a"@en .\n';
       const output = await toString(Readable.from([input])
         .pipe(new StreamParser({ format: 'N-Triples' }))
-        .pipe(createValidationStream({ format: 'N-Triples' }))
+        .pipe(createValidationStream({ format: 'application/n-triples' }))
         .pipe(new StreamWriter({ format: 'N-Triples' })));
       assert.equal(output, input);
     });
@@ -73,10 +73,10 @@ describe('createValidationStream', () => {
     it('stops TriG data with graphs from being written as Turtle', async () => {
       const input = '<http://ex.org/g> { <http://ex.org/s> <http://ex.org/p> <http://ex.org/o> . }';
       const parser = new StreamParser({ format: 'TriG' });
-      const validator = createValidationStream({ format: 'Turtle' });
+      const validator = createValidationStream({ format: 'text/turtle' });
       await assert.rejects(
         pipeline(Readable.from([input]), parser, validator, new StreamWriter({ format: 'Turtle' })),
-        /NamedNode cannot be the graph in Turtle/);
+        /NamedNode cannot be the graph in text\/turtle/);
     });
 
     it('filters out data that parses but is not valid RDF', async () => {
@@ -87,7 +87,7 @@ describe('createValidationStream', () => {
         '<http://ex.org/s> <http://ex.org/p> <http://ex.org/%ZZ> .',
         '',
       ].join('\n');
-      const validator = createValidationStream({ format: 'N-Triples', onInvalid: 'skip' });
+      const validator = createValidationStream({ format: 'application/n-triples', onInvalid: 'skip' });
       const invalid = [];
       validator.on('invalid', error => invalid.push(error.message));
       const output = await toString(Readable.from([input])
@@ -103,7 +103,7 @@ describe('createValidationStream', () => {
       const input = '?x <http://ex.org/p> "a" .';
       const output = await toString(Readable.from([input])
         .pipe(new StreamParser({ format: 'N3' }))
-        .pipe(createValidationStream({ format: 'N3' }))
+        .pipe(createValidationStream({ format: 'text/n3' }))
         .pipe(new StreamWriter({ format: 'N3' })));
       assert.match(output, /\?x <http:\/\/ex.org\/p> "a"/);
     });

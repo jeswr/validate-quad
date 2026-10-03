@@ -2,8 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DataFactory } from 'n3';
 import {
-  createValidator, validateQuad, QuadValidationError,
-  isValidIri, isValidLanguageTag, isValidBlankNodeLabel, isValidBaseDirection, isValidDatatypeValue,
+  createValidator, validateQuad,
 } from '@rdfjs/validate-quad';
 
 const { namedNode, blankNode, literal, variable, quad, defaultGraph } = DataFactory;
@@ -17,12 +16,16 @@ const g = namedNode('http://ex.org/g');
 const tripleTerm = quad(s, p, o);
 
 const FORMATS = {
-  Turtle: ['Turtle', 'text/turtle', 'turtle*'],
-  TriG: ['TriG', 'application/trig'],
-  'N-Triples': ['N-Triples', 'application/n-triples'],
-  'N-Quads': ['N-Quads', 'application/n-quads'],
-  N3: ['N3', 'Notation3', 'text/n3'],
+  Turtle: ['text/turtle'],
+  TriG: ['application/trig'],
+  'N-Triples': ['application/n-triples'],
+  'N-Quads': ['application/n-quads'],
+  N3: ['text/n3'],
 };
+
+function isValidationError(error) {
+  return error instanceof Error && error.name === 'QuadValidationError';
+}
 
 function expectValid(q, options) {
   assert.equal(validateQuad(q, options), null);
@@ -30,9 +33,7 @@ function expectValid(q, options) {
 
 function expectInvalid(q, options, position, message) {
   const error = validateQuad(q, options);
-  assert.ok(error instanceof QuadValidationError, `expected an error for ${JSON.stringify(options)}`);
-  assert.ok(error instanceof Error);
-  assert.equal(error.name, 'QuadValidationError');
+  assert.ok(isValidationError(error), `expected an error for ${JSON.stringify(options)}`);
   assert.equal(error.quad, q);
   assert.equal(error.position, position);
   if (message)
@@ -72,9 +73,9 @@ describe('validateQuad', () => {
         },
         graph: { termType: 'DefaultGraph', value: '' },
       };
-      expectValid(foreign, { format: 'N-Quads' });
+      expectValid(foreign, { format: 'application/n-quads' });
       foreign.object.value = 'one';
-      expectInvalid(foreign, { format: 'N-Quads' }, 'object', /not valid for datatype/);
+      expectInvalid(foreign, { format: 'application/n-quads' }, 'object', /not valid for datatype/);
     });
   });
 
@@ -120,7 +121,7 @@ describe('validateQuad', () => {
       for (const format of [...FORMATS.Turtle, ...FORMATS['N-Triples'], ...FORMATS.N3]) {
         expectInvalid(quad(s, p, o, g), { format }, 'graph', /NamedNode cannot be the graph in /);
       }
-      expectInvalid(quad(s, p, o, blankNode('g')), { format: 'Turtle' }, 'graph', /in Turtle$/);
+      expectInvalid(quad(s, p, o, blankNode('g')), { format: 'text/turtle' }, 'graph', /in text\/turtle$/);
     });
 
     it('describes an abstract dataset when no format is given', () => {
@@ -138,11 +139,11 @@ describe('validateQuad', () => {
       });
 
       it('accepts formulas as blank node graphs', () => {
-        expectValid(quad(s, p, o, blankNode('f')), { format: 'N3' });
+        expectValid(quad(s, p, o, blankNode('f')), { format: 'text/n3' });
       });
 
       it('rejects default graph terms outside the graph position', () => {
-        expectInvalid(quad(s, defaultGraph(), o), { format: 'N3' }, 'predicate');
+        expectInvalid(quad(s, defaultGraph(), o), { format: 'text/n3' }, 'predicate');
       });
     });
   });
@@ -150,13 +151,13 @@ describe('validateQuad', () => {
   describe('triple terms', () => {
     it('are accepted as objects in RDF 1.2', () => {
       expectValid(quad(s, p, tripleTerm));
-      expectValid(quad(s, p, quad(s, p, quad(s, p, literal('deep')))), { format: 'Turtle' });
+      expectValid(quad(s, p, quad(s, p, quad(s, p, literal('deep')))), { format: 'text/turtle' });
     });
 
     it('are rejected in RDF 1.1 and RDF 1.2 Basic', () => {
       expectInvalid(quad(s, p, tripleTerm), { version: '1.1' }, 'object', /triple terms are not part of RDF 1.1/);
       expectInvalid(quad(s, p, tripleTerm), { version: '1.2-basic' }, 'object', /RDF 1.2-basic/);
-      expectInvalid(quad(tripleTerm, p, o), { format: 'N3', version: '1.1' }, 'subject');
+      expectInvalid(quad(tripleTerm, p, o), { format: 'text/n3', version: '1.1' }, 'subject');
     });
 
     it('must not have a named graph', () => {
@@ -260,7 +261,7 @@ describe('validateQuad', () => {
 
     it('rejects non-objects', () => {
       const error = validateQuad(null);
-      assert.ok(error instanceof QuadValidationError);
+      assert.ok(isValidationError(error));
       assert.equal(error.position, null);
       assert.match(validateQuad('quad').message, /Expected a quad/);
     });
@@ -271,65 +272,70 @@ describe('validateQuad', () => {
   });
 
   describe('options', () => {
-    it('rejects unknown formats and versions', () => {
-      assert.throws(() => createValidator({ format: 'RDF/XML' }), /Unknown format: RDF\/XML/);
-      assert.throws(() => createValidator({ format: 3 }), TypeError);
-      assert.throws(() => createValidator({ version: '1.0' }), /Unknown RDF version: 1.0/);
+    it('accepts exactly the supported content types', () => {
+      for (const format of Object.values(FORMATS).flat())
+        assert.equal(typeof createValidator({ format }), 'function');
+    });
+
+    it('rejects anything else as a format', () => {
+      for (const format of ['Turtle', 'TriG', 'N-Triples', 'N-Quads', 'N3', 'turtle', 'text/turtle*',
+        'TEXT/TURTLE', 'text/turtle; charset=utf-8', ' text/turtle', 'application/rdf+xml',
+        'application/ld+json', '', null, 3, {}, 'toString'])
+        assert.throws(() => createValidator({ format }), /^Error: Unsupported format: .*; expected one of text\/turtle, application\/trig, application\/n-triples, application\/n-quads, text\/n3$/, String(format));
+    });
+
+    it('accepts exactly the supported versions', () => {
+      for (const version of ['1.1', '1.2-basic', '1.2'])
+        assert.equal(typeof createValidator({ version }), 'function');
+    });
+
+    it('rejects anything else as a version', () => {
+      for (const version of ['1.0', '1.3', '1.2-Basic', '1.2-full', '1.2 ', 'RDF 1.2', '', null, 1.1, 1.2, {}])
+        assert.throws(() => createValidator({ version }), /^Error: Unsupported RDF version: .*; expected one of 1\.1, 1\.2-basic, 1\.2$/, String(version));
+    });
+
+    it('rejects invalid term options', () => {
       assert.throws(() => createValidator({ terms: 'yes' }), TypeError);
       assert.throws(() => createValidator({ terms: null }), TypeError);
     });
 
-    it('treats a null format as an abstract dataset', () => {
-      expectValid(quad(s, p, o, g), { format: null });
-    });
-
     it('returns a reusable validator', () => {
-      const validate = createValidator({ format: 'Turtle' });
+      const validate = createValidator({ format: 'text/turtle' });
       assert.equal(validate(quad(s, p, o)), null);
-      assert.ok(validate(quad(s, p, o, g)) instanceof QuadValidationError);
+      assert.ok(isValidationError(validate(quad(s, p, o, g))));
       assert.equal(validate(quad(s, p, o)), null);
     });
   });
-});
 
-describe('term helpers', () => {
-  it('validate IRIs', () => {
-    assert.equal(isValidIri('http://ex.org/a'), true);
-    assert.equal(isValidIri('urn:isbn:0451450523'), true);
-    assert.equal(isValidIri('a'), false);
-    assert.equal(isValidIri('http://ex.org/a b'), false);
-  });
+  describe('term well-formedness details', () => {
+    const literalOf = value => quad(s, p, literal('x', value));
 
-  it('cache results across many distinct values', () => {
-    for (let i = 0; i < 10050; i++)
-      assert.equal(isValidIri(`http://ex.org/${i}`), true);
-    assert.equal(isValidIri('http://ex.org/0'), true);
-    assert.equal(isValidIri('not an iri'), false);
-  });
+    it('checks IRIs as per RFC 3987, caching results across many values', () => {
+      expectValid(quad(namedNode('urn:isbn:0451450523'), p, o));
+      for (let i = 0; i < 10050; i++)
+        expectValid(quad(namedNode(`http://ex.org/${i}`), p, o));
+      expectValid(quad(namedNode('http://ex.org/0'), p, o));
+      expectInvalid(quad(namedNode('a'), p, o), {}, 'subject');
+    });
 
-  it('validate language tags', () => {
-    for (const tag of ['en', 'en-US', 'EN-us', 'zh-Hant-TW', 'de-1996', 'x-private', 'i-klingon', 'en-GB-oed'])
-      assert.equal(isValidLanguageTag(tag), true, tag);
-    for (const tag of ['', 'en us', 'abcdefghi', 'en-', '1en'])
-      assert.equal(isValidLanguageTag(tag), false, tag);
-  });
+    it('checks language tags as per BCP 47', () => {
+      for (const tag of ['en', 'en-US', 'EN-us', 'zh-Hant-TW', 'de-1996', 'x-private', 'i-klingon', 'en-GB-oed', 'sgn-BE-FR'])
+        expectValid(literalOf(tag));
+      for (const tag of ['en us', 'abcdefghi', 'en-', '1en', 'x', 'x-'])
+        expectInvalid(literalOf(tag), {}, 'object', /language tag/);
+    });
 
-  it('validate blank node labels', () => {
-    for (const label of ['b0', '0', 'a.b', 'a-b', '_x', 'é'])
-      assert.equal(isValidBlankNodeLabel(label), true, label);
-    for (const label of ['', 'a b', '-a', 'a.', '.a', 'a:b'])
-      assert.equal(isValidBlankNodeLabel(label), false, label);
-  });
+    it('checks blank node labels', () => {
+      for (const label of ['b0', '0', 'a.b', 'a-b', '_x', 'é'])
+        expectValid(quad(blankNode(label), p, o));
+      for (const label of ['', 'a b', '-a', 'a.', '.a', 'a:b'])
+        expectInvalid(quad({ termType: 'BlankNode', value: label }, p, o), {}, 'subject', /blank node label/);
+    });
 
-  it('validate base directions', () => {
-    assert.equal(isValidBaseDirection('ltr'), true);
-    assert.equal(isValidBaseDirection('rtl'), true);
-    assert.equal(isValidBaseDirection('LTR'), false);
-  });
-
-  it('validate datatype values', () => {
-    assert.equal(isValidDatatypeValue('12', namedNode(`${XSD}integer`)), true);
-    assert.equal(isValidDatatypeValue('1.5', namedNode(`${XSD}integer`)), false);
-    assert.equal(isValidDatatypeValue('anything', namedNode('http://ex.org/unknown')), true);
+    it('checks literal values for known datatypes only', () => {
+      expectValid(quad(s, p, literal('12', namedNode(`${XSD}integer`))));
+      expectInvalid(quad(s, p, literal('1.5', namedNode(`${XSD}integer`))), {}, 'object');
+      expectValid(quad(s, p, literal('anything', namedNode('http://ex.org/unknown'))));
+    });
   });
 });
