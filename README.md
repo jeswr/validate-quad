@@ -16,7 +16,7 @@ It checks:
 npm install @rdfjs/validate-quad
 ```
 
-The package is written in TypeScript and ships its types. It exports four functions, `assertQuad`, `validateQuad`, `createValidator` and `createValidationStream`, plus the types for their options and results, including the narrowed `ValidQuad<Format, Version>`.
+The package is written in TypeScript and ships its types. It exports four functions, `assertQuad`, `validateQuad`, `createValidator` and `createValidationStream`, plus the types for their options and results, including the narrowed `ValidQuad<Format, Version>` and the typed `ValidationStream<Format, Version>`.
 
 ## Usage
 
@@ -42,6 +42,27 @@ By default an invalid quad fails the stream with a `QuadValidationError`. To dro
 const validator = createValidationStream({ format: 'application/n-triples', version: '1.2', onInvalid: 'skip' });
 validator.on('invalid', error => console.warn(error.message));
 ```
+
+In TypeScript, the stream is typed with the narrowed quads it lets through, as for `assertQuad` below: `data` listeners, `read()` and `for await` all see `ValidQuad<Format, Version>`. It also implements the RDF/JS [Sink](https://rdf.js.org/stream-spec/#sink-interface) interface, like the N3.js parser and writer, so the types carry through `import` chains:
+
+```ts
+const parser = new StreamParser({ format: 'N-Triples' });
+const validator = createValidationStream({ format: 'application/n-triples', version: '1.1' });
+const writer = new StreamWriter({ format: 'N-Triples' });
+writer.import(validator.import(parser.import(fs.createReadStream('data.nt'))));
+```
+
+Or consume the validated quads directly:
+
+```ts
+const quads = createValidationStream({ format: 'application/n-triples', version: '1.1' })
+  .import(new StreamParser({ format: 'N-Triples' }).import(fs.createReadStream('data.nt')));
+for await (const quad of quads) {
+  quad.object; // RDF.NamedNode | RDF.BlankNode | RDF.Literal (without a base direction)
+}
+```
+
+Node.js `.pipe()` returns its destination's own type, so it can't carry the narrowed type further; listen on the validation stream itself, or use `import`, to keep it.
 
 ### Asserting a quad, with type narrowing
 

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { pipeline } from 'node:stream/promises';
 import { DataFactory, StreamParser, StreamWriter } from 'n3';
 import { createValidationStream } from '@rdfjs/validate-quad';
@@ -106,6 +107,47 @@ describe('createValidationStream', () => {
         .pipe(createValidationStream({ format: 'text/n3', version: '1.2' }))
         .pipe(new StreamWriter({ format: 'N3' })));
       assert.match(output, /\?x <http:\/\/ex.org\/p> "a"/);
+    });
+  });
+
+  describe('as an RDF/JS Sink', () => {
+    const options = { format: 'application/n-triples', version: '1.2' };
+
+    it('imports an N3.js parser and feeds an N3.js writer', async () => {
+      const input = '<http://ex.org/s> <http://ex.org/p> "a" .\n';
+      const parser = new StreamParser({ format: 'N-Triples' });
+      const validator = createValidationStream(options);
+      assert.equal(validator.import(parser.import(Readable.from([input]))), validator);
+      const writer = new StreamWriter({ format: 'N-Triples' });
+      assert.equal(await toString(writer.import(validator)), input);
+    });
+
+    it('imports an event emitter that is not a Node.js stream', async () => {
+      const source = new EventEmitter();
+      const validator = createValidationStream({ ...options, onInvalid: 'skip' });
+      validator.import(source);
+      const output = collect(validator);
+      const valid = quad(s, p, literal('a'));
+      source.emit('data', valid);
+      source.emit('data', quad(s, p, literal('b'), g));
+      source.emit('end');
+      assert.deepEqual(await output, [valid]);
+    });
+
+    it('forwards errors from the imported stream', async () => {
+      const source = new EventEmitter();
+      const validator = createValidationStream(options).import(source);
+      const output = collect(validator);
+      source.emit('error', new Error('boom'));
+      await assert.rejects(output, /boom/);
+    });
+
+    it('can be iterated asynchronously', async () => {
+      const quads = [quad(s, p, literal('a')), quad(s, p, literal('b'))];
+      const seen = [];
+      for await (const q of Readable.from(quads).pipe(createValidationStream(options)))
+        seen.push(q);
+      assert.deepEqual(seen, quads);
     });
   });
 });

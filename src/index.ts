@@ -3,6 +3,7 @@ import { validateIri, IriValidationStrategy } from 'validate-iri';
 import { parse as parseLanguageTag } from 'bcp-47';
 import { validators as datatypeValidators } from 'rdf-validate-datatype';
 import { Transform } from 'readable-stream';
+import type { EventEmitter } from 'node:events';
 
 /** An RDF content type that quads can be validated against. */
 export type ContentType =
@@ -100,6 +101,36 @@ export interface ValidTriple<F extends ContentType, V extends RdfVersion> extend
   predicate: ValidPredicate<F, V>;
   object: ValidObject<F, V>;
   graph: RDF.DefaultGraph;
+}
+
+/**
+ * The validation stream: a Node.js object-mode Transform that is also an
+ * RDF/JS Stream and Sink, typed with the quads that pass validation.
+ */
+export interface ValidationStream<F extends ContentType = ContentType, V extends RdfVersion = RdfVersion>
+  // Structurally an RDF.Stream<ValidQuad<F, V>> and an RDF.Sink; extending those
+  // directly conflicts with the event emitter typings of Transform
+  extends Transform {
+  /** Pulls the next valid quad, or null if none is buffered. */
+  read(size?: number): ValidQuad<F, V> | null;
+  /** Consumes an RDF/JS stream of quads, returning this stream of valid quads. */
+  import(stream: EventEmitter): this;
+  [Symbol.asyncIterator](): AsyncIteratorObject<ValidQuad<F, V>, undefined, unknown>;
+  on(event: 'data', listener: (quad: ValidQuad<F, V>) => void): this;
+  on(event: 'invalid', listener: (error: QuadValidationError) => void): this;
+  on(event: 'error', listener: (error: Error) => void): this;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches the Transform signature
+  on(event: string | symbol, listener: (...args: any[]) => void): this;
+  once(event: 'data', listener: (quad: ValidQuad<F, V>) => void): this;
+  once(event: 'invalid', listener: (error: QuadValidationError) => void): this;
+  once(event: 'error', listener: (error: Error) => void): this;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches the Transform signature
+  once(event: string | symbol, listener: (...args: any[]) => void): this;
+  addListener(event: 'data', listener: (quad: ValidQuad<F, V>) => void): this;
+  addListener(event: 'invalid', listener: (error: QuadValidationError) => void): this;
+  addListener(event: 'error', listener: (error: Error) => void): this;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches the Transform signature
+  addListener(event: string | symbol, listener: (...args: any[]) => void): this;
 }
 
 /** A quad that is valid for the given content type and RDF version. */
@@ -376,14 +407,16 @@ export function assertQuad<Q extends RDF.BaseQuad, F extends ContentType, V exte
  * Creates an object-mode stream that passes valid quads through.
  * Invalid quads cause an error (`onInvalid: 'error'`, the default)
  * or are dropped with an `invalid` event (`onInvalid: 'skip'`).
+ * In TypeScript, the quads it emits are narrowed like those of `assertQuad`.
  */
-export function createValidationStream(options: ValidationStreamOptions): Transform {
+export function createValidationStream<F extends ContentType, V extends RdfVersion>(
+  options: ValidationStreamOptions<F, V>): ValidationStream<F, V> {
   const validate = createValidator(options);
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
   const onInvalid: unknown = options.onInvalid === undefined ? 'error' : options.onInvalid;
   if (onInvalid !== 'error' && onInvalid !== 'skip')
     throw new Error(`Unsupported onInvalid option value: ${String(JSON.stringify(onInvalid))}; expected error or skip`);
-  const stream: Transform = new Transform({
+  const stream = new Transform({
     objectMode: true,
     transform(quad: RDF.BaseQuad, _encoding, done) {
       const error = validate(quad);
@@ -394,6 +427,17 @@ export function createValidationStream(options: ValidationStreamOptions): Transf
       stream.emit('invalid', error);
       done();
     },
-  });
+  }) as unknown as ValidationStream<F, V>;
+  // Implement the RDF/JS Sink interface, as the N3.js parser and writer do
+  stream.import = function (input: EventEmitter) {
+    input.on('error', (error: unknown) => this.destroy(error as Error));
+    if (typeof (input as Partial<NodeJS.ReadableStream>).pipe === 'function')
+      (input as NodeJS.ReadableStream).pipe(this);
+    else {
+      input.on('data', (quad: RDF.BaseQuad) => this.write(quad));
+      input.on('end', () => this.end());
+    }
+    return this;
+  };
   return stream;
 }
